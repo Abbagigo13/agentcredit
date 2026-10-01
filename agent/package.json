@@ -5,5 +5,10 @@
   "private": true,
   "scripts": {
     "start": "node src/agent.js"
+  },
+  "dependencies": {
+    "dotenv": "^18.0.4",
+    "openai": "^7.25.0",
+    "viem": "^2.57.1"
   }
 }
