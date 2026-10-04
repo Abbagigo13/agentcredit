@@ -4,7 +4,8 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "start": "node src/agent.js"
+    "start": "node src/agent.js",
+    "server": "node src/server.js"
   },
   "dependencies": {
     "dotenv": "^18.0.4",

@@ -23,7 +23,8 @@ CONFIDENCE: based on coverage (low if many signals are missing)
 EVIDENCE: the key facts you found, in 2-4 short lines
 REASONING: 2-3 sentences
 
-If the agent does not exist or has no reputation data, say INSUFFICIENT_DATA rather than guessing.`;
+If the agent does not exist or has no reputation data, say INSUFFICIENT_DATA rather than guessing.
+Use plain text only. Do not use markdown, asterisks or bold formatting.`;
 
 export async function analyze(task, { maxSteps = 8, onEvent = () => {} } = {}) {
   const messages = [

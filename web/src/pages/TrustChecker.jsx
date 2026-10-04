@@ -5,51 +5,71 @@ import {
   CheckCircle2,
   XCircle,
   ArrowRight,
+  Loader2,
 } from 'lucide-react';
 
 const demoAgents = {
-  'agent-alpha': {
-    name: 'Agent Alpha',
-    score: 91,
-  },
-  'agent-nova': {
-    name: 'Agent Nova',
-    score: 84,
-  },
-  'agent-orbit': {
-    name: 'Agent Orbit',
-    score: 76,
-  },
-  'agent-rogue': {
-    name: 'Agent Rogue',
-    score: 38,
-  },
+  'agent-alpha': { name: 'Agent Alpha', score: 91 },
+  'agent-nova': { name: 'Agent Nova', score: 84 },
+  'agent-orbit': { name: 'Agent Orbit', score: 76 },
+  'agent-rogue': { name: 'Agent Rogue', score: 38 },
 };
+
+const ANALYST_URL = import.meta.env.VITE_ANALYST_URL || 'http://localhost:8787';
 
 function TrustChecker() {
   const [agentId, setAgentId] = useState('');
   const [threshold, setThreshold] = useState('70');
   const [result, setResult] = useState(null);
+  const [loading, setLoading] = useState(false);
 
-  function checkTrust() {
-    const agent = demoAgents[agentId.toLowerCase().trim()];
+  async function checkTrust() {
+    const id = agentId.toLowerCase().trim();
+    const required = Number(threshold);
 
-    if (!agent) {
-      setResult({
-        type: 'not-found',
-        message: 'Agent not found.',
-      });
+    if (!id) return;
+
+    if (/^\d+$/.test(id)) {
+      setLoading(true);
+      setResult({ type: 'loading', agentId: id });
+
+      try {
+        const response = await fetch(`${ANALYST_URL}/api/analyze`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ agentId: Number(id), threshold: required }),
+        });
+        const data = await response.json();
+
+        if (!response.ok) {
+          setResult({ type: 'error', message: data.error || 'Analysis failed.' });
+          return;
+        }
+
+        setResult({ type: 'live', data });
+      } catch {
+        setResult({
+          type: 'error',
+          message: 'Could not reach the analyst server. Is it running?',
+        });
+      } finally {
+        setLoading(false);
+      }
 
       return;
     }
 
-    const score = agent.score;
-    const required = Number(threshold);
+    const agent = demoAgents[id];
+
+    if (!agent) {
+      setResult({ type: 'not-found', message: 'Agent not found.' });
+      return;
+    }
 
     setResult({
-      type: score >= required ? 'approved' : 'rejected',
+      type: agent.score >= required ? 'approved' : 'rejected',
       agent,
-      score,
+      score: agent.score,
       required,
     });
   }
@@ -61,13 +81,11 @@ function TrustChecker() {
           <span className="section-label">Trust Checker</span>
 
           <h1>
-            Should you <span className="gradient-text">trust</span> this
-            agent?
+            Should you <span className="gradient-text">trust</span> this agent?
           </h1>
 
           <p>
-            Check an agent's trust score against the minimum requirement
-            for your application.
+            Check an agent's trust score against the minimum requirement for your application.
           </p>
         </div>
 
@@ -81,13 +99,13 @@ function TrustChecker() {
               <input
                 value={agentId}
                 onChange={(event) => setAgentId(event.target.value)}
-                placeholder="Try: agent-alpha"
+                placeholder="Try: 1 or agent-alpha"
               />
             </div>
 
             <span className="input-hint">
-              Demo agents: agent-alpha, agent-nova, agent-orbit,
-              agent-rogue
+              Live onchain: enter an ERC-8004 agent number, e.g. 1.
+              Demo agents: agent-alpha, agent-nova, agent-orbit, agent-rogue
             </span>
           </div>
 
@@ -107,34 +125,146 @@ function TrustChecker() {
             </div>
           </div>
 
-          <button className="check-button" onClick={checkTrust}>
-            Check Trust
-            <ArrowRight size={17} />
+          <button
+            className="check-button"
+            onClick={checkTrust}
+            disabled={loading}
+          >
+            {loading ? (
+              <>
+                Checking...
+                <Loader2 size={17} className="animate-spin" />
+              </>
+            ) : (
+              <>
+                Check Trust
+                <ArrowRight size={17} />
+              </>
+            )}
           </button>
         </div>
 
-        {result && (
-          <Result result={result} />
-        )}
+        {result && <Result result={result} />}
       </div>
     </main>
   );
 }
 
+function summarizeStep(step) {
+  const r = step.result;
+
+  if (!r) return 'No result';
+  if (r.error) return `Error: ${r.error}`;
+
+  switch (step.tool) {
+    case 'get_agent_identity':
+      return r.exists
+        ? `Found "${r.name || 'unnamed agent'}", active: ${String(r.active)}`
+        : 'Agent is not registered';
+    case 'get_reputation':
+      return r.feedbackCount > 0
+        ? `${r.feedbackCount} feedback entries from ${r.clientCount} clients, summary ${r.summaryValue}`
+        : 'No reputation feedback found';
+    case 'compute_trust_score':
+      return r.score === null
+        ? 'Not enough signals to score'
+        : `Score ${r.score} (${r.level}), ${Math.round(r.coverage * 100)}% signal coverage`;
+    case 'check_threshold':
+      return r.meetsThreshold ? 'Meets the threshold' : 'Below the threshold';
+    default:
+      return 'Done';
+  }
+}
+
+function LiveResult({ data }) {
+  const approved = data.verdict === 'APPROVE';
+  const label = approved
+    ? 'ACCESS APPROVED'
+    : data.verdict === 'REJECT'
+      ? 'ACCESS REJECTED'
+      : 'INSUFFICIENT DATA';
+
+  return (
+    <div className={`result-card live-result ${approved ? 'approved' : 'rejected'}`}>
+      <div className="result-icon">
+        {approved ? <CheckCircle2 size={32} /> : <XCircle size={32} />}
+      </div>
+
+      <div className="result-content">
+        <span className="result-label">{label}</span>
+
+        <h2>Agent #{data.agentId}</h2>
+
+        <p>
+          Trust score: <strong>{data.score ?? 'n/a'}/100</strong>
+          {' - '}
+          Required: <strong>{data.threshold}/100</strong>
+        </p>
+
+        <div className="trace">
+          <span className="trace-title">Qwen 3.8 Max reasoning steps</span>
+
+          {data.trace?.map((step, index) => (
+            <div className="trace-step" key={index}>
+              <span className="trace-index">{index + 1}</span>
+
+              <div>
+                <code>{step.tool}</code>
+                <p>{summarizeStep(step)}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <pre className="analyst-answer">{data.answer}</pre>
+
+        <span className="trace-meta">
+          {data.rounds} model rounds - {(data.durationMs / 1000).toFixed(0)}s - live data from Monad testnet
+        </span>
+      </div>
+    </div>
+  );
+}
+
 function Result({ result }) {
+  if (result.type === 'loading') {
+    return (
+      <div className="result-card loading">
+        <Loader2 size={28} className="animate-spin" />
+        <div>
+          <h2>Analyzing Agent #{result.agentId}...</h2>
+          <p>Fetching onchain signals and calculating trust score.</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (result.type === 'error') {
+    return (
+      <div className="result-card rejected">
+        <XCircle size={28} />
+        <div>
+          <h2>Error</h2>
+          <p>{result.message}</p>
+        </div>
+      </div>
+    );
+  }
+
   if (result.type === 'not-found') {
     return (
       <div className="result-card rejected">
         <XCircle size={28} />
-
         <div>
           <h2>Agent not found</h2>
-          <p>
-            No matching agent was found in the current registry.
-          </p>
+          <p>No matching agent was found in the current registry.</p>
         </div>
       </div>
     );
+  }
+
+  if (result.type === 'live') {
+    return <LiveResult data={result.data} />;
   }
 
   const approved = result.type === 'approved';
@@ -142,11 +272,7 @@ function Result({ result }) {
   return (
     <div className={`result-card ${approved ? 'approved' : 'rejected'}`}>
       <div className="result-icon">
-        {approved ? (
-          <CheckCircle2 size={32} />
-        ) : (
-          <XCircle size={32} />
-        )}
+        {approved ? <CheckCircle2 size={32} /> : <XCircle size={32} />}
       </div>
 
       <div className="result-content">
@@ -157,11 +283,9 @@ function Result({ result }) {
         <h2>{result.agent.name}</h2>
 
         <p>
-          Trust score:{' '}
-          <strong>{result.score}/100</strong>
+          Trust score: <strong>{result.score}/100</strong>
           {' · '}
-          Required:{' '}
-          <strong>{result.required}/100</strong>
+          Required: <strong>{result.required}/100</strong>
         </p>
 
         <div className="result-score">
