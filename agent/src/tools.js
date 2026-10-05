@@ -1,4 +1,4 @@
-import { getAgentIdentity, getReputation } from "./chain.js";
+import { getAgentIdentity, getReputation, recordAnalysisOnchain, hashEvidence } from "./chain.js";
 import { getTrustLevel, meetsTrustThreshold } from "../../web/src/lib/scoring.js";
 
 const WEIGHTS = {
@@ -96,13 +96,33 @@ export const toolDefinitions = [
   },
 ];
 
-export async function runTool(name, args = {}) {
+export const recordToolDefinition = {
+  type: "function",
+  function: {
+    name: "record_onchain",
+    description:
+      "Write the trust score to the AgentCredit contract on Monad testnet as a permanent onchain record. Call this ONCE, after you have checked identity and reputation and decided your verdict. It takes only the agent id; the score, coverage and evidence hash are derived automatically from your registry reads.",
+    parameters: {
+      type: "object",
+      properties: { agent_id: { type: "integer" } },
+      required: ["agent_id"],
+    },
+  },
+};
+
+export async function runTool(name, args = {}, ctx = {}) {
   try {
     switch (name) {
-      case "get_agent_identity":
-        return await getAgentIdentity(args.agent_id);
-      case "get_reputation":
-        return await getReputation(args.agent_id);
+      case "get_agent_identity": {
+        const result = await getAgentIdentity(args.agent_id);
+        ctx.identity = result;
+        return result;
+      }
+      case "get_reputation": {
+        const result = await getReputation(args.agent_id);
+        ctx.reputation = result;
+        return result;
+      }
       case "compute_trust_score":
         return scoreFromSignals({
           successRate: args.success_rate,
@@ -117,6 +137,36 @@ export async function runTool(name, args = {}) {
           threshold: args.threshold,
           meetsThreshold: meetsTrustThreshold(args.score, args.threshold),
         };
+      case "record_onchain": {
+        if (!ctx.identity?.exists) {
+          return { error: "Verify the agent identity with get_agent_identity first." };
+        }
+        if (Number(args.agent_id) !== ctx.identity.agentId) {
+          return { error: "agent_id does not match the agent you analyzed." };
+        }
+        if (!ctx.reputation || ctx.reputation.feedbackCount === 0) {
+          return { error: "No onchain reputation data, so there is nothing reliable to record." };
+        }
+
+        const verified = scoreFromSignals({
+          reputationScore: ctx.reputation.summaryValue,
+        });
+        const coverage = Math.round(verified.coverage * 100);
+        const evidenceHash = hashEvidence({
+          identity: ctx.identity,
+          reputation: ctx.reputation,
+          scoring: verified,
+        });
+
+        const tx = await recordAnalysisOnchain({
+          agentId: ctx.identity.agentId,
+          score: verified.score,
+          coverage,
+          evidenceHash,
+        });
+
+        return { recorded: true, score: verified.score, coverage, evidenceHash, ...tx };
+      }
       default:
         return { error: `Unknown tool: ${name}` };
     }

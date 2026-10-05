@@ -9,6 +9,7 @@ if (!task) {
 console.log("Task:", task, "\n");
 
 const { answer, steps } = await analyze(task, {
+    record: process.env.RECORD === "1",
   onEvent: (e) => {
     if (e.type === "tool_call") console.log("-> tool:", e.name, JSON.stringify(e.args));
     if (e.type === "tool_result") console.log("   result:", JSON.stringify(e.result));

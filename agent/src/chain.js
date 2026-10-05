@@ -1,4 +1,5 @@
-import { createPublicClient, http, parseAbi } from "viem";
+import { createPublicClient, createWalletClient, http, parseAbi, keccak256, toHex } from "viem";
+import { privateKeyToAccount } from "viem/accounts";
 
 const RPC_URL = "https://testnet-rpc.monad.xyz";
 const IDENTITY = "0x8004A818BFB912233c491871b3d84c89A494BD9e";
@@ -75,5 +76,48 @@ export async function getReputation(agentId) {
     feedbackCount: Number(count),
     clientCount: clients.length,
     summaryValue: Number(value) / 10 ** Number(decimals),
+  };
+}
+
+const contractAbi = parseAbi([
+  "function recordAnalysis(uint256 agentId, uint256 score, uint256 coverage, bytes32 evidenceHash)",
+]);
+
+export function hashEvidence(evidence) {
+  return keccak256(toHex(JSON.stringify(evidence)));
+}
+
+export async function recordAnalysisOnchain({ agentId, score, coverage, evidenceHash }) {
+  const key = process.env.ANALYST_PRIVATE_KEY;
+  const contract = process.env.AGENTCREDIT_CONTRACT;
+
+  if (!key || !contract) {
+    throw new Error("ANALYST_PRIVATE_KEY or AGENTCREDIT_CONTRACT is missing in agent/.env");
+  }
+
+  const account = privateKeyToAccount(key);
+  const writeChain = {
+    id: 10143,
+    name: "Monad Testnet",
+    nativeCurrency: { name: "MON", symbol: "MON", decimals: 18 },
+    rpcUrls: { default: { http: [RPC_URL] } },
+  };
+
+  const wallet = createWalletClient({ account, chain: writeChain, transport: http(RPC_URL) });
+
+  const txHash = await wallet.writeContract({
+    address: contract,
+    abi: contractAbi,
+    functionName: "recordAnalysis",
+    args: [BigInt(agentId), BigInt(score), BigInt(coverage), evidenceHash],
+  });
+
+  const receipt = await client.waitForTransactionReceipt({ hash: txHash });
+
+  return {
+    txHash,
+    status: receipt.status,
+    blockNumber: Number(receipt.blockNumber),
+    contract,
   };
 }

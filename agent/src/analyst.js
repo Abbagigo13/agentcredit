@@ -1,6 +1,6 @@
 import "dotenv/config";
 import OpenAI from "openai";
-import { toolDefinitions, runTool } from "./tools.js";
+import { toolDefinitions, recordToolDefinition, runTool } from "./tools.js";
 
 const client = new OpenAI({
   apiKey: process.env.DASHSCOPE_API_KEY,
@@ -25,10 +25,14 @@ REASONING: 2-3 sentences
 
 If the agent does not exist or has no reputation data, say INSUFFICIENT_DATA rather than guessing.
 Use plain text only. Do not use markdown, asterisks or bold formatting.`;
+const RECORD_NOTE = `
+After you have decided your verdict, call record_onchain once for this agent so the result is stored permanently on Monad testnet. Then give the final answer and add a line "ONCHAIN: " followed by the transaction hash. If record_onchain returns an error, say so briefly instead.`;
 
-export async function analyze(task, { maxSteps = 8, onEvent = () => {} } = {}) {
+export async function analyze(task, { maxSteps = 8, onEvent = () => {}, record = false } = {}) {
+  const ctx = {};
+  const tools = record ? [...toolDefinitions, recordToolDefinition] : toolDefinitions;
   const messages = [
-    { role: "system", content: SYSTEM_PROMPT },
+        { role: "system", content: SYSTEM_PROMPT + (record ? RECORD_NOTE : "") },
     { role: "user", content: task },
   ];
 
@@ -36,7 +40,7 @@ export async function analyze(task, { maxSteps = 8, onEvent = () => {} } = {}) {
     const res = await client.chat.completions.create({
       model: process.env.QWEN_MODEL,
       messages,
-      tools: toolDefinitions,
+      tools,
     });
 
     const msg = res.choices[0].message;
@@ -55,7 +59,7 @@ export async function analyze(task, { maxSteps = 8, onEvent = () => {} } = {}) {
       }
 
       onEvent({ type: "tool_call", name: call.function.name, args });
-      const result = await runTool(call.function.name, args);
+            const result = await runTool(call.function.name, args, ctx);
       onEvent({ type: "tool_result", name: call.function.name, result });
 
       messages.push({
