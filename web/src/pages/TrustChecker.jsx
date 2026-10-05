@@ -21,6 +21,7 @@ function TrustChecker() {
   const [agentId, setAgentId] = useState('');
   const [threshold, setThreshold] = useState('70');
   const [result, setResult] = useState(null);
+  const [record, setRecord] = useState(false);
   const [loading, setLoading] = useState(false);
 
   async function checkTrust() {
@@ -37,7 +38,7 @@ function TrustChecker() {
         const response = await fetch(`${ANALYST_URL}/api/analyze`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ agentId: Number(id), threshold: required }),
+                    body: JSON.stringify({ agentId: Number(id), threshold: required, record }),
         });
         const data = await response.json();
 
@@ -125,6 +126,17 @@ function TrustChecker() {
             </div>
           </div>
 
+          <label className="record-toggle">
+            <input
+              type="checkbox"
+              checked={record}
+              onChange={(event) => setRecord(event.target.checked)}
+            />
+            <span>
+              Record verdict onchain (Monad testnet, live agent numbers only)
+            </span>
+          </label>
+
           <button
             className="check-button"
             onClick={checkTrust}
@@ -171,6 +183,10 @@ function summarizeStep(step) {
         : `Score ${r.score} (${r.level}), ${Math.round(r.coverage * 100)}% signal coverage`;
     case 'check_threshold':
       return r.meetsThreshold ? 'Meets the threshold' : 'Below the threshold';
+          case 'record_onchain':
+      return r.recorded
+        ? `Recorded ${r.score}/100 onchain in block ${r.blockNumber}`
+        : 'Not recorded';
     default:
       return 'Done';
   }
@@ -215,7 +231,27 @@ function LiveResult({ data }) {
             </div>
           ))}
         </div>
+                {data.onchain && (
+          <div className="onchain-box">
+            <span className="trace-title">Recorded onchain</span>
 
+            <p>
+              Score {data.onchain.score}/100 - coverage {data.onchain.coverage}%
+            </p>
+
+            <a
+              href={`https://testnet.monadexplorer.com/tx/${data.onchain.txHash}`}
+              target="_blank"
+              rel="noreferrer"
+            >
+              View transaction on Monad Explorer
+            </a>
+
+            <code className="hash">
+              Evidence hash: {data.onchain.evidenceHash}
+            </code>
+          </div>
+        )}
         <pre className="analyst-answer">{data.answer}</pre>
 
         <span className="trace-meta">

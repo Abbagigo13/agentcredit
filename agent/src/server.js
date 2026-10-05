@@ -6,6 +6,14 @@ const PORT = process.env.PORT || 8787;
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || "http://localhost:5173")
   .split(",")
   .map((s) => s.trim());
+  const MAX_RECORDS_PER_HOUR = Number(process.env.MAX_RECORDS_PER_HOUR || 10);
+let recordWrites = [];
+
+function recordBudgetLeft() {
+  const now = Date.now();
+  recordWrites = recordWrites.filter((t) => now - t < 3_600_000);
+  return recordWrites.length < MAX_RECORDS_PER_HOUR;
+}
 
 const hits = new Map();
 function rateLimited(ip) {
@@ -82,17 +90,30 @@ const server = http.createServer(async (req, res) => {
       if (!Number.isFinite(threshold) || threshold < 0 || threshold > 100) {
         return send(res, 400, { error: "threshold must be between 0 and 100." }, origin);
       }
+            const record = body.record === true;
+      if (record && !recordBudgetLeft()) {
+        return send(
+          res,
+          429,
+          { error: "Onchain recording limit reached for this hour. Run the check without recording, or try again later." },
+          origin
+        );
+      }
 
       const task = `Can agent ${agentId} be trusted for a task that requires a minimum trust score of ${threshold}?`;
       const trace = [];
       const started = Date.now();
 
       const { answer, steps } = await analyze(task, {
+        record,
         onEvent: (e) => {
           if (e.type === "tool_call") trace.push({ tool: e.name, args: e.args });
           if (e.type === "tool_result") trace[trace.length - 1].result = e.result;
         },
       });
+
+      const written = trace.find((t) => t.tool === "record_onchain" && t.result?.recorded);
+      if (written) recordWrites.push(Date.now());
 
       return send(
         res,
@@ -103,6 +124,7 @@ const server = http.createServer(async (req, res) => {
           ...parseVerdict(answer, trace),
           answer: String(answer || "").replace(/\*\*/g, ""),
           trace,
+          onchain: written ? written.result : null,
           rounds: steps,
           durationMs: Date.now() - started,
         },

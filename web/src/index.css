@@ -1230,3 +1230,44 @@ a {
   min-width: 0;
   flex: 1;
 }
+
+.record-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 4px 0 18px;
+  font-size: 14px;
+  opacity: 0.85;
+  cursor: pointer;
+}
+
+.record-toggle input {
+  width: 16px;
+  height: 16px;
+  accent-color: #7c3aed;
+}
+
+.onchain-box {
+  margin-top: 16px;
+  padding: 14px;
+  border-radius: 10px;
+  background: rgba(124, 58, 237, 0.12);
+  border: 1px solid rgba(124, 58, 237, 0.35);
+}
+
+.onchain-box p {
+  margin: 6px 0;
+}
+
+.onchain-box a {
+  color: #c4b5fd;
+  text-decoration: underline;
+}
+
+.onchain-box .hash {
+  display: block;
+  margin-top: 10px;
+  font-size: 12px;
+  opacity: 0.75;
+  overflow-wrap: anywhere;
+}
