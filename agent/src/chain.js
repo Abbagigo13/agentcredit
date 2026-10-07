@@ -71,11 +71,14 @@ export async function getReputation(agentId) {
     address: REPUTATION, abi: reputationAbi, functionName: "getSummary", args: [id, clients, "", ""],
   });
 
+  const summary = Number(value) / 10 ** Number(decimals);
+
   return {
     agentId: Number(agentId),
     feedbackCount: Number(count),
     clientCount: clients.length,
-    summaryValue: Number(value) / 10 ** Number(decimals),
+    summaryValue: summary,
+    scaleValid: summary >= 0 && summary <= 100,
   };
 }
 

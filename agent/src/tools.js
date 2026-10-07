@@ -9,6 +9,13 @@ const WEIGHTS = {
   recency: 0.05,
 };
 
+const MIN_FEEDBACK = 3;
+const MIN_CLIENTS = 2;
+
+function sampleTooSmall(rep) {
+  return rep.feedbackCount < MIN_FEEDBACK || rep.clientCount < MIN_CLIENTS;
+}
+
 export function scoreFromSignals(signals) {
   let weighted = 0;
   let coverage = 0;
@@ -124,6 +131,26 @@ export async function runTool(name, args = {}, ctx = {}) {
         return result;
       }
       case "compute_trust_score":
+                if (
+          ctx.reputation &&
+          ctx.reputation.scaleValid === false &&
+          args.reputation_score !== undefined
+        ) {
+          return {
+            error:
+              "This agent's registry summary is not on a 0-100 scale (feedback types are mixed), so it cannot be used as a reputation score. Report INSUFFICIENT_DATA.",
+          };
+        }
+
+                if (
+          ctx.reputation &&
+          args.reputation_score !== undefined &&
+          sampleTooSmall(ctx.reputation)
+        ) {
+          return {
+            error: `Too little evidence: the registry has ${ctx.reputation.feedbackCount} feedback entries from ${ctx.reputation.clientCount} clients, and at least ${MIN_FEEDBACK} entries from ${MIN_CLIENTS} different clients are required to use it as a reputation score. Report INSUFFICIENT_DATA.`,
+          };
+        }
         return scoreFromSignals({
           successRate: args.success_rate,
           validationRate: args.validation_rate,
@@ -146,6 +173,12 @@ export async function runTool(name, args = {}, ctx = {}) {
         }
         if (!ctx.reputation || ctx.reputation.feedbackCount === 0) {
           return { error: "No onchain reputation data, so there is nothing reliable to record." };
+        }
+                if (ctx.reputation.scaleValid === false) {
+          return { error: "Reputation summary is not on a 0-100 scale, so there is nothing reliable to record." };
+        }
+                if (sampleTooSmall(ctx.reputation)) {
+          return { error: "Too little feedback evidence to record a score onchain." };
         }
 
         const verified = scoreFromSignals({
