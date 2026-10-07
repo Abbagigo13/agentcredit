@@ -1,4 +1,4 @@
-import { getAgentIdentity, getReputation, recordAnalysisOnchain, hashEvidence } from "./chain.js";
+import { getAgentIdentity, getFeedbackBreakdown, recordAnalysisOnchain, hashEvidence } from "./chain.js";
 import { getTrustLevel, meetsTrustThreshold } from "../../web/src/lib/scoring.js";
 
 const WEIGHTS = {
@@ -12,8 +12,60 @@ const WEIGHTS = {
 const MIN_FEEDBACK = 3;
 const MIN_CLIENTS = 2;
 
-function sampleTooSmall(rep) {
-  return rep.feedbackCount < MIN_FEEDBACK || rep.clientCount < MIN_CLIENTS;
+function deriveSignals(breakdown) {
+  const signals = {};
+  const notes = [];
+
+  if (!breakdown || breakdown.entries === 0) {
+    return { signals, notes: ["The agent has no feedback entries."] };
+  }
+
+  if (breakdown.clientCount < MIN_CLIENTS) {
+    return {
+      signals,
+      notes: [
+        `Feedback comes from ${breakdown.clientCount} client(s); at least ${MIN_CLIENTS} different clients are required.`,
+      ],
+    };
+  }
+
+  if (breakdown.success) {
+    if (breakdown.success.total >= MIN_FEEDBACK) {
+      signals.successRate = breakdown.success.rate;
+    } else {
+      notes.push(
+        `Only ${breakdown.success.total} win/loss outcomes; at least ${MIN_FEEDBACK} are required.`
+      );
+    }
+  }
+
+  if (breakdown.validation) {
+    if (breakdown.validation.total >= MIN_FEEDBACK) {
+      signals.validationRate = breakdown.validation.rate;
+    } else {
+      notes.push(
+        `Only ${breakdown.validation.total} pass/fail checks; at least ${MIN_FEEDBACK} are required.`
+      );
+    }
+  }
+
+  if (breakdown.rating) {
+    if (breakdown.rating.count >= MIN_FEEDBACK) {
+      signals.reputationScore = breakdown.rating.avg;
+    } else {
+      notes.push(
+        `Only ${breakdown.rating.count} percentage rating(s); at least ${MIN_FEEDBACK} are required.`
+      );
+    }
+  }
+
+  if (breakdown.offScaleEntries > 0) {
+    notes.push(
+      `${breakdown.offScaleEntries} feedback entries use a non-percentage scale (for example Elo) and were ignored.`
+    );
+  }
+
+  return { signals, notes };
 }
 
 export function scoreFromSignals(signals) {
@@ -49,7 +101,8 @@ export const toolDefinitions = [
     type: "function",
     function: {
       name: "get_agent_identity",
-      description: "Read an agent's ERC-8004 identity from the Monad testnet Identity Registry: owner, name, services and whether it exists.",
+      description:
+        "Read an agent's ERC-8004 identity from the Monad testnet Identity Registry: owner, name, services and whether it exists.",
       parameters: {
         type: "object",
         properties: { agent_id: { type: "integer", description: "The numeric ERC-8004 agentId" } },
@@ -60,8 +113,9 @@ export const toolDefinitions = [
   {
     type: "function",
     function: {
-      name: "get_reputation",
-      description: "Read an agent's onchain reputation from the ERC-8004 Reputation Registry: feedback count, number of distinct clients, and the summary value (0-100).",
+      name: "get_feedback_breakdown",
+      description:
+        "Read every feedback entry for an agent from the ERC-8004 Reputation Registry and sort it by type: win/loss outcomes, pass/fail validation checks, percentage ratings, and off-scale values (such as Elo).",
       parameters: {
         type: "object",
         properties: { agent_id: { type: "integer" } },
@@ -73,16 +127,12 @@ export const toolDefinitions = [
     type: "function",
     function: {
       name: "compute_trust_score",
-      description: "Compute the AgentCredit trust score (0-100) from the signals you have evidence for. Pass ONLY signals backed by tool results and never invent values. Missing signals are reported back with a coverage figure.",
+      description:
+        "Compute the AgentCredit trust score (0-100) for the agent. It takes only the agent id and derives the signals itself from the verified feedback breakdown, applying minimum-evidence rules. You cannot supply signal values.",
       parameters: {
         type: "object",
-        properties: {
-          success_rate: { type: "number", description: "0-100, only if evidenced" },
-          validation_rate: { type: "number", description: "0-100, only if evidenced" },
-          reputation_score: { type: "number", description: "0-100, e.g. the onchain summary value" },
-          reliability: { type: "number", description: "0-100, only if evidenced" },
-          recency: { type: "number", description: "0-100, only if evidenced" },
-        },
+        properties: { agent_id: { type: "integer" } },
+        required: ["agent_id"],
       },
     },
   },
@@ -125,39 +175,19 @@ export async function runTool(name, args = {}, ctx = {}) {
         ctx.identity = result;
         return result;
       }
-      case "get_reputation": {
-        const result = await getReputation(args.agent_id);
-        ctx.reputation = result;
+      case "get_feedback_breakdown": {
+        const result = await getFeedbackBreakdown(args.agent_id);
+        ctx.breakdown = result;
         return result;
       }
-      case "compute_trust_score":
-                if (
-          ctx.reputation &&
-          ctx.reputation.scaleValid === false &&
-          args.reputation_score !== undefined
-        ) {
-          return {
-            error:
-              "This agent's registry summary is not on a 0-100 scale (feedback types are mixed), so it cannot be used as a reputation score. Report INSUFFICIENT_DATA.",
-          };
+      case "compute_trust_score": {
+        if (!ctx.breakdown) {
+          return { error: "Call get_feedback_breakdown first." };
         }
 
-                if (
-          ctx.reputation &&
-          args.reputation_score !== undefined &&
-          sampleTooSmall(ctx.reputation)
-        ) {
-          return {
-            error: `Too little evidence: the registry has ${ctx.reputation.feedbackCount} feedback entries from ${ctx.reputation.clientCount} clients, and at least ${MIN_FEEDBACK} entries from ${MIN_CLIENTS} different clients are required to use it as a reputation score. Report INSUFFICIENT_DATA.`,
-          };
-        }
-        return scoreFromSignals({
-          successRate: args.success_rate,
-          validationRate: args.validation_rate,
-          reputationScore: args.reputation_score,
-          reliability: args.reliability,
-          recency: args.recency,
-        });
+        const { signals, notes } = deriveSignals(ctx.breakdown);
+        return { ...scoreFromSignals(signals), notes };
+      }
       case "check_threshold":
         return {
           score: args.score,
@@ -171,23 +201,21 @@ export async function runTool(name, args = {}, ctx = {}) {
         if (Number(args.agent_id) !== ctx.identity.agentId) {
           return { error: "agent_id does not match the agent you analyzed." };
         }
-        if (!ctx.reputation || ctx.reputation.feedbackCount === 0) {
-          return { error: "No onchain reputation data, so there is nothing reliable to record." };
-        }
-                if (ctx.reputation.scaleValid === false) {
-          return { error: "Reputation summary is not on a 0-100 scale, so there is nothing reliable to record." };
-        }
-                if (sampleTooSmall(ctx.reputation)) {
-          return { error: "Too little feedback evidence to record a score onchain." };
+        if (!ctx.breakdown) {
+          return { error: "Call get_feedback_breakdown first." };
         }
 
-        const verified = scoreFromSignals({
-          reputationScore: ctx.reputation.summaryValue,
-        });
+        const { signals, notes } = deriveSignals(ctx.breakdown);
+        const verified = scoreFromSignals(signals);
+
+        if (verified.score === null) {
+          return { error: `Nothing reliable to record. ${notes.join(" ")}` };
+        }
+
         const coverage = Math.round(verified.coverage * 100);
         const evidenceHash = hashEvidence({
           identity: ctx.identity,
-          reputation: ctx.reputation,
+          breakdown: ctx.breakdown,
           scoring: verified,
         });
 

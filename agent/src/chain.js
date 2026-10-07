@@ -124,3 +124,97 @@ export async function recordAnalysisOnchain({ agentId, score, coverage, evidence
     contract,
   };
 }
+
+const feedbackAbi = parseAbi([
+  "function readAllFeedback(uint256 agentId, address[] clientAddresses, string tag1, string tag2, bool includeRevoked) view returns (address[] clients, uint64[] feedbackIndexes, int128[] values, uint8[] valueDecimals, string[] tag1s, string[] tag2s, bool[] revokedStatuses)",
+]);
+
+const POSITIVE = ["win", "pass", "passed", "success", "succeeded", "ok"];
+const NEGATIVE = ["loss", "lose", "fail", "failed", "failure", "error"];
+const VALIDATION_HINTS = ["check", "valid", "verif", "audit"];
+
+function toRate(bucket) {
+  const total = bucket.positive + bucket.negative;
+  if (total === 0) return null;
+
+  return {
+    total,
+    positive: bucket.positive,
+    negative: bucket.negative,
+    rate: Math.round((bucket.positive / total) * 1000) / 10,
+  };
+}
+
+export async function getFeedbackBreakdown(agentId) {
+  const id = BigInt(agentId);
+
+  const clients = await client.readContract({
+    address: REPUTATION,
+    abi: reputationAbi,
+    functionName: "getClients",
+    args: [id],
+  });
+
+  if (clients.length === 0) {
+    return {
+      entries: 0,
+      clientCount: 0,
+      success: null,
+      validation: null,
+      rating: null,
+      offScaleEntries: 0,
+    };
+  }
+
+  const res = await client.readContract({
+    address: REPUTATION,
+    abi: feedbackAbi,
+    functionName: "readAllFeedback",
+    args: [id, clients, "", "", false],
+  });
+
+  const values = res[2];
+  const decimals = res[3];
+  const tag1s = res[4];
+  const tag2s = res[5];
+
+  const success = { positive: 0, negative: 0 };
+  const validation = { positive: 0, negative: 0 };
+  const ratings = [];
+  let offScale = 0;
+
+  values.forEach((raw, i) => {
+    const value = Number(raw) / 10 ** Number(decimals[i]);
+    const t1 = String(tag1s[i] || "").toLowerCase();
+    const t2 = String(tag2s[i] || "").toLowerCase();
+    const label = [t2, t1].find((t) => POSITIVE.includes(t) || NEGATIVE.includes(t));
+
+    if (label) {
+      const bucket = VALIDATION_HINTS.some((h) => t1.includes(h)) ? validation : success;
+      if (POSITIVE.includes(label)) bucket.positive += 1;
+      else bucket.negative += 1;
+      return;
+    }
+
+    if (value >= 0 && value <= 100) {
+      ratings.push(value);
+      return;
+    }
+
+    offScale += 1;
+  });
+
+  return {
+    entries: values.length,
+    clientCount: clients.length,
+    success: toRate(success),
+    validation: toRate(validation),
+    rating: ratings.length
+      ? {
+          count: ratings.length,
+          avg: Math.round((ratings.reduce((a, b) => a + b, 0) / ratings.length) * 10) / 10,
+        }
+      : null,
+    offScaleEntries: offScale,
+  };
+}

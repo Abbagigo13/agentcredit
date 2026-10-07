@@ -18,7 +18,9 @@ const demoAgents = {
 const ANALYST_URL = import.meta.env.VITE_ANALYST_URL || 'http://localhost:8787';
 
 function TrustChecker() {
-  const [agentId, setAgentId] = useState('');
+    const [agentId, setAgentId] = useState(
+    new URLSearchParams(window.location.search).get('agent') || ''
+  );
   const [threshold, setThreshold] = useState('70');
   const [result, setResult] = useState(null);
   const [record, setRecord] = useState(false);
@@ -187,6 +189,8 @@ function summarizeStep(step) {
       return r.recorded
         ? `Recorded ${r.score}/100 onchain in block ${r.blockNumber}`
         : 'Not recorded';
+            case 'get_feedback_breakdown':
+      return `${r.entries} feedback entries from ${r.clientCount} clients`;
     default:
       return 'Done';
   }

@@ -1271,3 +1271,21 @@ a {
   opacity: 0.75;
   overflow-wrap: anywhere;
 }
+
+.live-note {
+  margin: 0 0 18px;
+  font-size: 13px;
+  opacity: 0.65;
+}
+
+.lookup-error {
+  margin: 0 0 14px;
+  color: #fbbf24;
+  font-size: 14px;
+}
+
+.agent-meta {
+  margin-top: 4px;
+  font-size: 12px;
+  opacity: 0.6;
+}

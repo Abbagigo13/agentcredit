@@ -18,7 +18,11 @@ const publicClient = createPublicClient({
       },
     },
   },
-  transport: http(MONAD_TESTNET.rpcUrl),
+    transport: http(MONAD_TESTNET.rpcUrl, {
+    batch: { batchSize: 10, wait: 20 },
+    retryCount: 4,
+    retryDelay: 800,
+  }),
 });
 
 export function getPublicClient() {

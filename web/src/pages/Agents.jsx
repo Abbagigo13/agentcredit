@@ -1,51 +1,107 @@
+import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Search,
   ShieldCheck,
   ArrowUpRight,
   CheckCircle2,
+  Loader2,
 } from 'lucide-react';
+import {
+  FEATURED_IDS,
+  MIN_FEEDBACK,
+  MIN_CLIENTS,
+  getScoredAgentIds,
+  loadAgent,
+  loadAgents,
+} from '../lib/registry';
 
-const agents = [
-  {
-    id: 'agent-alpha',
-    name: 'Agent Alpha',
-    description: 'General-purpose autonomous task agent',
-    score: 91,
-    tasks: 10,
-    success: 9,
-    status: 'Verified',
-  },
-  {
-    id: 'agent-nova',
-    name: 'Agent Nova',
-    description: 'DeFi research and execution agent',
-    score: 84,
-    tasks: 25,
-    success: 22,
-    status: 'Verified',
-  },
-  {
-    id: 'agent-orbit',
-    name: 'Agent Orbit',
-    description: 'Cross-chain automation agent',
-    score: 76,
-    tasks: 18,
-    success: 15,
-    status: 'Verified',
-  },
-  {
-    id: 'agent-rogue',
-    name: 'Agent Rogue',
-    description: 'Experimental autonomous agent',
-    score: 38,
-    tasks: 10,
-    success: 3,
-    status: 'Low Trust',
-  },
-];
+function shortAddress(address) {
+  return address ? `${address.slice(0, 6)}...${address.slice(-4)}` : '';
+}
+
+function evidenceStatus(agent) {
+  if (agent.credit) return { label: 'Scored by AgentCredit', tone: 'verified' };
+  if (agent.feedbackCount === 0) return { label: 'No feedback yet', tone: 'low' };
+  if (!agent.scaleValid) return { label: 'Off-scale feedback', tone: 'low' };
+  if (!agent.enoughEvidence) return { label: 'Too little evidence', tone: 'low' };
+  return { label: 'Ready to analyze', tone: 'verified' };
+}
 
 function Agents() {
+  const [agents, setAgents] = useState({});
+  const [loading, setLoading] = useState(true);
+  const [lookup, setLookup] = useState('');
+  const [lookupError, setLookupError] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function run() {
+      const scored = await getScoredAgentIds();
+      const ids = [...new Set([...scored, ...FEATURED_IDS])];
+
+            await loadAgents(
+        ids,
+        (agent) => {
+          if (!cancelled) {
+            setAgents((previous) => ({ ...previous, [agent.id]: agent }));
+          }
+        },
+        () => cancelled
+      );
+
+      if (!cancelled) setLoading(false);
+    }
+
+    run();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const list = useMemo(
+    () =>
+      Object.values(agents)
+        .filter((agent) => agent.exists)
+        .sort((a, b) => {
+          if (Boolean(b.credit) !== Boolean(a.credit)) {
+            return Boolean(b.credit) - Boolean(a.credit);
+          }
+          return b.feedbackCount - a.feedbackCount;
+        }),
+    [agents]
+  );
+
+  const failed = Object.values(agents).filter((agent) => agent.error).length;
+
+  async function handleLookup(event) {
+    event.preventDefault();
+
+    const id = lookup.trim();
+    setLookupError('');
+
+    if (!/^\d+$/.test(id)) {
+      setLookupError('Enter an agent number, for example 20.');
+      return;
+    }
+
+    try {
+      const agent = await loadAgent(Number(id));
+
+      if (!agent.exists) {
+        setLookupError(`Agent #${id} is not registered.`);
+        return;
+      }
+
+      setAgents((previous) => ({ ...previous, [agent.id]: agent }));
+      setLookup('');
+    } catch {
+      setLookupError('Could not load that agent. Please try again.');
+    }
+  }
+
   return (
     <main className="page">
       <div className="container">
@@ -58,64 +114,120 @@ function Agents() {
             </h1>
 
             <p>
-              Explore AI agents and inspect their onchain trust signals.
+              Real ERC-8004 agents on Monad testnet, with their onchain trust
+              signals.
             </p>
           </div>
 
-          <div className="search-box">
+          <form className="search-box" onSubmit={handleLookup}>
             <Search size={17} />
-            <input placeholder="Search agents..." />
-          </div>
+            <input
+              placeholder="Look up agent number, e.g. 20"
+              value={lookup}
+              onChange={(event) => setLookup(event.target.value)}
+            />
+          </form>
         </div>
 
+        <p className="live-note">
+          Live data read from the ERC-8004 registries and the AgentCredit
+          contract. Agents need at least {MIN_FEEDBACK} feedback entries from{' '}
+          {MIN_CLIENTS} different clients before AgentCredit will score them.
+        </p>
+
+        {lookupError && <p className="lookup-error">{lookupError}</p>}
+
+        {loading && list.length === 0 && (
+          <div className="result-card loading-card">
+            <Loader2 size={28} className="spin" />
+
+            <div>
+              <h2>Loading agents from Monad testnet</h2>
+              <p>Reading the registries directly from the chain.</p>
+            </div>
+          </div>
+        )}
+
         <div className="agent-grid">
-          {agents.map((agent) => (
+          {list.map((agent) => (
             <AgentCard key={agent.id} agent={agent} />
           ))}
         </div>
+
+        {failed > 0 && (
+          <p className="live-note">
+            {failed} agent(s) could not be loaded right now. Refresh to retry.
+          </p>
+        )}
       </div>
     </main>
   );
 }
 
 function AgentCard({ agent }) {
-  const trusted = agent.score >= 70;
+  const status = evidenceStatus(agent);
+  const title = agent.name || `Agent #${agent.id}`;
+
+  const summaryText =
+    agent.summary === null
+      ? 'n/a'
+      : agent.scaleValid
+        ? String(Math.round(agent.summary * 100) / 100)
+        : `${Math.round(agent.summary * 100) / 100} (off-scale)`;
 
   return (
-    <Link to={`/agents/${agent.id}`} className="agent-card">
+    <Link to={`/trust-checker?agent=${agent.id}`} className="agent-card">
       <div className="agent-card-top">
         <div className="agent-avatar">
           <ShieldCheck size={21} />
         </div>
 
-        <div className={`status ${trusted ? 'verified' : 'low'}`}>
+        <div className={`status ${status.tone}`}>
           <CheckCircle2 size={13} />
-          {agent.status}
+          {status.label}
         </div>
       </div>
 
-      <h3>{agent.name}</h3>
+      <h3>{title}</h3>
 
-      <p>{agent.description}</p>
+      <p>
+        {agent.description ||
+          (agent.registrationReadable
+            ? 'No description provided.'
+            : 'Registration file is stored externally.')}
+      </p>
 
-      <div className="agent-score-row">
-        <div>
-          <span>Trust Score</span>
-          <strong>{agent.score}</strong>
+      <p className="agent-meta">
+        Agent #{agent.id} - owner {shortAddress(agent.owner)}
+      </p>
+
+      {agent.credit ? (
+        <div className="agent-score-row">
+          <div>
+            <span>AgentCredit score</span>
+            <strong>{agent.credit.score}</strong>
+          </div>
+
+          <div className="score-bar">
+            <div style={{ width: `${agent.credit.score}%` }} />
+          </div>
+
+          <p className="agent-meta">
+            Coverage {agent.credit.coverage}% - recorded onchain
+          </p>
         </div>
-
-        <div className="score-bar">
-          <div
-            style={{
-              width: `${agent.score}%`,
-            }}
-          />
+      ) : (
+        <div className="agent-score-row">
+          <div>
+            <span>Registry summary</span>
+            <strong>{summaryText}</strong>
+          </div>
         </div>
-      </div>
+      )}
 
       <div className="agent-card-footer">
         <span>
-          {agent.success}/{agent.tasks} successful tasks
+          {agent.feedbackCount} feedback from {agent.clientCount} clients
         </span>
 
         <ArrowUpRight size={17} />

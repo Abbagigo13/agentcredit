@@ -17,3 +17,4 @@ export const ERC8004 = {
 
 export const AGENT_REGISTRY_NAMESPACE =
   `eip155:${MONAD_TESTNET.id}:${ERC8004.identityRegistry}`;
+export const AGENTCREDIT_CONTRACT = "0x0b0792a328c2253e4F23f98875ebb7DEEa859971";
