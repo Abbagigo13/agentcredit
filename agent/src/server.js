@@ -15,6 +15,21 @@ function recordBudgetLeft() {
   return recordWrites.length < MAX_RECORDS_PER_HOUR;
 }
 
+const MAX_ANALYSES_PER_DAY = Number(process.env.MAX_ANALYSES_PER_DAY || 150);
+let analysisRuns = [];
+
+function analysisBudgetLeft() {
+  const now = Date.now();
+  analysisRuns = analysisRuns.filter((t) => now - t < 86_400_000);
+  return analysisRuns.length < MAX_ANALYSES_PER_DAY;
+}
+
+function clientIp(req) {
+  const forwarded = req.headers["x-forwarded-for"];
+  if (forwarded) return String(forwarded).split(",")[0].trim();
+  return req.socket.remoteAddress || "unknown";
+}
+
 const hits = new Map();
 function rateLimited(ip) {
   const now = Date.now();
@@ -74,7 +89,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (req.method === "POST" && req.url === "/api/analyze") {
-    const ip = req.socket.remoteAddress || "unknown";
+        const ip = clientIp(req);
     if (rateLimited(ip)) {
       return send(res, 429, { error: "Too many requests, try again in a minute." }, origin);
     }
@@ -100,6 +115,16 @@ const server = http.createServer(async (req, res) => {
         );
       }
 
+
+            if (!analysisBudgetLeft()) {
+        return send(
+          res,
+          429,
+          { error: "The demo has reached its daily analysis limit. Please try again tomorrow." },
+          origin
+        );
+      }
+      analysisRuns.push(Date.now());
       const task = `Can agent ${agentId} be trusted for a task that requires a minimum trust score of ${threshold}?`;
       const trace = [];
       const started = Date.now();

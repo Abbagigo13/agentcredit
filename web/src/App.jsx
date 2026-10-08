@@ -1,11 +1,26 @@
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import {
+  BrowserRouter,
+  Routes,
+  Route,
+  Navigate,
+  useParams,
+} from 'react-router-dom';
 
 import Navbar from './components/Navbar';
 import Home from './pages/Home';
 import Agents from './pages/Agents';
-import AgentProfile from './pages/AgentProfile';
 import TrustChecker from './pages/TrustChecker';
+ 
+function AgentRedirect() {
+  const { agentId } = useParams();
 
+  return (
+    <Navigate
+      to={`/trust-checker?agent=${encodeURIComponent(agentId)}`}
+      replace
+    />
+  );
+}
 function App() {
   return (
     <BrowserRouter>
@@ -15,7 +30,7 @@ function App() {
         <Routes>
           <Route path="/" element={<Home />} />
           <Route path="/agents" element={<Agents />} />
-          <Route path="/agents/:agentId" element={<AgentProfile />} />
+                    <Route path="/agents/:agentId" element={<AgentRedirect />} />
           <Route path="/trust-checker" element={<TrustChecker />} />
         </Routes>
       </div>

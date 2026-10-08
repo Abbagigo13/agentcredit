@@ -23,9 +23,32 @@ function shortAddress(address) {
 function evidenceStatus(agent) {
   if (agent.credit) return { label: 'Scored by AgentCredit', tone: 'verified' };
   if (agent.feedbackCount === 0) return { label: 'No feedback yet', tone: 'low' };
-  if (!agent.scaleValid) return { label: 'Off-scale feedback', tone: 'low' };
-  if (!agent.enoughEvidence) return { label: 'Too little evidence', tone: 'low' };
-  return { label: 'Ready to analyze', tone: 'verified' };
+  if (agent.usable) return { label: 'Ready to analyze', tone: 'verified' };
+
+  const b = agent.breakdown;
+  if (!b.success && !b.validation && !b.rating && b.offScaleEntries > 0) {
+    return { label: 'Off-scale feedback', tone: 'low' };
+  }
+
+  return { label: 'Too little evidence', tone: 'low' };
+}
+
+function describeStat(agent) {
+  const b = agent.breakdown;
+
+  if (b.success) {
+    return { label: 'Win rate', value: `${b.success.rate}% (${b.success.positive}/${b.success.total})` };
+  }
+  if (b.validation) {
+    return { label: 'Check pass rate', value: `${b.validation.rate}% (${b.validation.positive}/${b.validation.total})` };
+  }
+  if (b.rating) {
+    return { label: 'Average rating', value: String(b.rating.avg) };
+  }
+  if (b.offScaleEntries > 0) {
+    return { label: 'Feedback type', value: 'Elo-style, not scored' };
+  }
+  return { label: 'Feedback', value: 'none yet' };
 }
 
 function Agents() {
@@ -168,12 +191,7 @@ function AgentCard({ agent }) {
   const status = evidenceStatus(agent);
   const title = agent.name || `Agent #${agent.id}`;
 
-  const summaryText =
-    agent.summary === null
-      ? 'n/a'
-      : agent.scaleValid
-        ? String(Math.round(agent.summary * 100) / 100)
-        : `${Math.round(agent.summary * 100) / 100} (off-scale)`;
+    const stat = describeStat(agent);
 
   return (
     <Link to={`/trust-checker?agent=${agent.id}`} className="agent-card">
@@ -219,8 +237,8 @@ function AgentCard({ agent }) {
       ) : (
         <div className="agent-score-row">
           <div>
-            <span>Registry summary</span>
-            <strong>{summaryText}</strong>
+                        <span>{stat.label}</span>
+            <strong>{stat.value}</strong>
           </div>
         </div>
       )}

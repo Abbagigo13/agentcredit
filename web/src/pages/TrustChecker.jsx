@@ -8,13 +8,6 @@ import {
   Loader2,
 } from 'lucide-react';
 
-const demoAgents = {
-  'agent-alpha': { name: 'Agent Alpha', score: 91 },
-  'agent-nova': { name: 'Agent Nova', score: 84 },
-  'agent-orbit': { name: 'Agent Orbit', score: 76 },
-  'agent-rogue': { name: 'Agent Rogue', score: 38 },
-};
-
 const ANALYST_URL = import.meta.env.VITE_ANALYST_URL || 'http://localhost:8787';
 
 function TrustChecker() {
@@ -62,18 +55,9 @@ function TrustChecker() {
       return;
     }
 
-    const agent = demoAgents[id];
-
-    if (!agent) {
-      setResult({ type: 'not-found', message: 'Agent not found.' });
-      return;
-    }
-
-    setResult({
-      type: agent.score >= required ? 'approved' : 'rejected',
-      agent,
-      score: agent.score,
-      required,
+        setResult({
+      type: 'not-found',
+      message: 'Enter an agent number from the Agents page, for example 10.',
     });
   }
 
@@ -102,13 +86,13 @@ function TrustChecker() {
               <input
                 value={agentId}
                 onChange={(event) => setAgentId(event.target.value)}
-                placeholder="Try: 1 or agent-alpha"
+                                placeholder="Try: 10"
               />
             </div>
 
             <span className="input-hint">
-              Live onchain: enter an ERC-8004 agent number, e.g. 1.
-              Demo agents: agent-alpha, agent-nova, agent-orbit, agent-rogue
+                            Enter an ERC-8004 agent number from the Agents page, for
+              example 10 or 20.
             </span>
           </div>
 
