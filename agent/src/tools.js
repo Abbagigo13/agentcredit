@@ -1,5 +1,5 @@
 import { getAgentIdentity, getFeedbackBreakdown, recordAnalysisOnchain, hashEvidence } from "./chain.js";
-import { getTrustLevel, meetsTrustThreshold } from "../../web/src/lib/scoring.js";
+import { getTrustLevel, meetsTrustThreshold } from "./scoring.js";
 
 const WEIGHTS = {
   successRate: 0.4,
