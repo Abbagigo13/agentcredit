@@ -30,6 +30,45 @@ function clientIp(req) {
   return req.socket.remoteAddress || "unknown";
 }
 
+const CACHE_TTL_MS = 10 * 60 * 1000;
+const resultCache = new Map();
+
+function cacheGet(key) {
+  const hit = resultCache.get(key);
+  if (!hit) return null;
+
+  if (Date.now() - hit.at > CACHE_TTL_MS) {
+    resultCache.delete(key);
+    return null;
+  }
+
+  return hit.data;
+}
+
+function cacheSet(key, data) {
+  resultCache.set(key, { at: Date.now(), data });
+
+  if (resultCache.size > 200) {
+    resultCache.delete(resultCache.keys().next().value);
+  }
+}
+
+function streamHeaders(origin) {
+  const headers = {
+    "Content-Type": "application/x-ndjson",
+    "Cache-Control": "no-cache, no-transform",
+    "X-Accel-Buffering": "no",
+  };
+
+  if (origin && ALLOWED_ORIGINS.includes(origin)) {
+    headers["Access-Control-Allow-Origin"] = origin;
+    headers["Access-Control-Allow-Headers"] = "Content-Type";
+    headers["Access-Control-Allow-Methods"] = "POST, GET, OPTIONS";
+  }
+
+  return headers;
+}
+
 const hits = new Map();
 function rateLimited(ip) {
   const now = Date.now();
@@ -159,6 +198,107 @@ const server = http.createServer(async (req, res) => {
       console.error("analyze failed:", err.message);
       return send(res, 500, { error: "Analysis failed. Please try again." }, origin);
     }
+  }
+   
+  if (req.method === "POST" && req.url === "/api/analyze-stream") {
+    if (rateLimited(clientIp(req))) {
+      return send(res, 429, { error: "Too many requests, try again in a minute." }, origin);
+    }
+
+    let body;
+    try {
+      body = JSON.parse((await readBody(req)) || "{}");
+    } catch {
+      return send(res, 400, { error: "Invalid request body." }, origin);
+    }
+
+    const agentId = Number(body.agentId);
+    const threshold = body.threshold === undefined ? 70 : Number(body.threshold);
+    const record = body.record === true;
+
+    if (!Number.isInteger(agentId) || agentId < 0) {
+      return send(res, 400, { error: "agentId must be a non-negative integer." }, origin);
+    }
+    if (!Number.isFinite(threshold) || threshold < 0 || threshold > 100) {
+      return send(res, 400, { error: "threshold must be between 0 and 100." }, origin);
+    }
+
+    const key = `${agentId}:${threshold}:${record}`;
+    const cached = cacheGet(key);
+
+    if (!cached) {
+      if (record && !recordBudgetLeft()) {
+        return send(
+          res,
+          429,
+          { error: "Onchain recording limit reached for this hour. Run the check without recording, or try again later." },
+          origin
+        );
+      }
+      if (!analysisBudgetLeft()) {
+        return send(
+          res,
+          429,
+          { error: "The demo has reached its daily analysis limit. Please try again tomorrow." },
+          origin
+        );
+      }
+      analysisRuns.push(Date.now());
+    }
+
+    res.writeHead(200, streamHeaders(origin));
+    const emit = (event) => res.write(JSON.stringify(event) + "\n");
+
+    if (cached) {
+      for (const step of cached.trace) {
+        emit({ type: "tool_call", name: step.tool, args: step.args });
+        emit({ type: "tool_result", name: step.tool, result: step.result });
+      }
+      emit({ type: "final", data: { ...cached, cached: true } });
+      return res.end();
+    }
+
+    const task = `Can agent ${agentId} be trusted for a task that requires a minimum trust score of ${threshold}?`;
+    const trace = [];
+    const started = Date.now();
+
+    try {
+      const { answer, steps } = await analyze(task, {
+        record,
+        onEvent: (e) => {
+          if (e.type === "tool_call") {
+            trace.push({ tool: e.name, args: e.args });
+            emit(e);
+          }
+          if (e.type === "tool_result") {
+            trace[trace.length - 1].result = e.result;
+            emit(e);
+          }
+        },
+      });
+
+      const written = trace.find((t) => t.tool === "record_onchain" && t.result?.recorded);
+      if (written) recordWrites.push(Date.now());
+
+      const data = {
+        agentId,
+        threshold,
+        ...parseVerdict(answer, trace),
+        answer: String(answer || "").replace(/\*\*/g, ""),
+        trace,
+        onchain: written ? written.result : null,
+        rounds: steps,
+        durationMs: Date.now() - started,
+      };
+
+      if (data.verdict !== "UNKNOWN") cacheSet(key, data);
+      emit({ type: "final", data });
+    } catch (err) {
+      console.error("analyze-stream failed:", err.message);
+      emit({ type: "error", message: "Analysis failed. Please try again." });
+    }
+
+    return res.end();
   }
 
   send(res, 404, { error: "Not found" }, origin);

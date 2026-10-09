@@ -25,24 +25,65 @@ function TrustChecker() {
 
     if (!id) return;
 
-    if (/^\d+$/.test(id)) {
-      setLoading(true);
-      setResult({ type: 'loading', agentId: id });
+        if (/^\d+$/.test(id)) {
+      setResult({ type: 'streaming', agentId: id, steps: [] });
+          setLoading(true);
 
       try {
-        const response = await fetch(`${ANALYST_URL}/api/analyze`, {
+        const response = await fetch(`${ANALYST_URL}/api/analyze-stream`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ agentId: Number(id), threshold: required, record }),
+          body: JSON.stringify({ agentId: Number(id), threshold: required, record }),
         });
-        const data = await response.json();
 
         if (!response.ok) {
+          const data = await response.json().catch(() => ({}));
           setResult({ type: 'error', message: data.error || 'Analysis failed.' });
           return;
         }
 
-        setResult({ type: 'live', data });
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let steps = [];
+        let finished = false;
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop();
+
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            const event = JSON.parse(line);
+
+            if (event.type === 'tool_call') {
+              steps = [...steps, { tool: event.name, args: event.args }];
+              setResult({ type: 'streaming', agentId: id, steps });
+            } else if (event.type === 'tool_result') {
+              steps = steps.map((step, index) =>
+                index === steps.length - 1 ? { ...step, result: event.result } : step
+              );
+              setResult({ type: 'streaming', agentId: id, steps });
+            } else if (event.type === 'final') {
+              finished = true;
+              setResult({ type: 'live', data: event.data });
+            } else if (event.type === 'error') {
+              finished = true;
+              setResult({ type: 'error', message: event.message });
+            }
+          }
+        }
+
+        if (!finished) {
+          setResult({
+            type: 'error',
+            message: 'The connection closed before the analysis finished. Please try again.',
+          });
+        }
       } catch {
         setResult({
           type: 'error',
@@ -244,6 +285,7 @@ function LiveResult({ data }) {
 
         <span className="trace-meta">
           {data.rounds} model rounds - {(data.durationMs / 1000).toFixed(0)}s - live data from Monad testnet
+                    {data.cached ? ' - served from cache' : ''}
         </span>
       </div>
     </div>
@@ -251,6 +293,34 @@ function LiveResult({ data }) {
 }
 
 function Result({ result }) {
+    if (result.type === 'streaming') {
+    return (
+      <div className="result-card loading-card">
+        <Loader2 size={28} className="spin" />
+
+        <div className="result-content">
+          <h2>Qwen is analyzing agent #{result.agentId}</h2>
+          <p>
+            Each step appears as the agent runs it. A full analysis takes
+            around 30 seconds.
+          </p>
+
+          <div className="trace">
+            {result.steps.map((step, index) => (
+              <div className="trace-step" key={index}>
+                <span className="trace-index">{index + 1}</span>
+
+                <div>
+                  <code>{step.tool}</code>
+                  <p>{step.result ? summarizeStep(step) : 'Running...'}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
   if (result.type === 'loading') {
     return (
       <div className="result-card loading">
