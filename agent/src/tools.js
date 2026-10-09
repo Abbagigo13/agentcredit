@@ -1,4 +1,4 @@
-import { getAgentIdentity, getFeedbackBreakdown, recordAnalysisOnchain, hashEvidence } from "./chain.js";
+import { getAgentIdentity, getFeedbackBreakdown, recordAnalysisOnchain, hashEvidence, getOnchainRecord } from "./chain.js";
 import { getTrustLevel, meetsTrustThreshold } from "./scoring.js";
 
 const WEIGHTS = {
@@ -234,4 +234,28 @@ export async function runTool(name, args = {}, ctx = {}) {
   } catch (err) {
     return { error: err.message };
   }
+}
+
+export async function verifyRecord(agentId) {
+    const [record, identity, breakdown] = await Promise.all([
+    getOnchainRecord(agentId),
+    getAgentIdentity(agentId),
+    getFeedbackBreakdown(agentId),
+  ]);
+
+  const { signals } = deriveSignals(breakdown);
+  const scoring = scoreFromSignals(signals);
+  const recomputedHash = hashEvidence({ identity, breakdown, scoring });
+
+  return {
+    agentId: Number(agentId),
+    recorded: record,
+    currentScore: scoring.score,
+    currentCoverage: Math.round(scoring.coverage * 100),
+    recomputedHash,
+    hashMatches: record
+      ? record.evidenceHash.toLowerCase() === recomputedHash.toLowerCase()
+      : null,
+    evidence: { identity, breakdown, scoring },
+  };
 }

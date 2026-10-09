@@ -22,7 +22,7 @@ const client = createPublicClient({
     nativeCurrency: { name: "MON", symbol: "MON", decimals: 18 },
     rpcUrls: { default: { http: [RPC_URL] } },
   },
-  transport: http(RPC_URL),
+    transport: http(RPC_URL, { timeout: 20_000, retryCount: 4, retryDelay: 800 }),
 });
 
 export async function getAgentIdentity(agentId) {
@@ -216,5 +216,32 @@ export async function getFeedbackBreakdown(agentId) {
         }
       : null,
     offScaleEntries: offScale,
+  };
+}
+
+const creditReadAbi = parseAbi([
+  "function getTrustRecord(uint256 agentId) view returns ((uint256 score, uint256 updatedAt, bool exists, uint256 coverage, address attester, bytes32 evidenceHash, uint256 updateCount))",
+]);
+
+export async function getOnchainRecord(agentId) {
+  const contract = process.env.AGENTCREDIT_CONTRACT;
+  if (!contract) throw new Error("AGENTCREDIT_CONTRACT is missing in agent/.env");
+
+  const record = await client.readContract({
+    address: contract,
+    abi: creditReadAbi,
+    functionName: "getTrustRecord",
+    args: [BigInt(agentId)],
+  });
+
+  if (!record.exists) return null;
+
+  return {
+    score: Number(record.score),
+    coverage: Number(record.coverage),
+    updatedAt: Number(record.updatedAt),
+    attester: record.attester,
+    evidenceHash: record.evidenceHash,
+    updateCount: Number(record.updateCount),
   };
 }

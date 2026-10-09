@@ -196,10 +196,11 @@ function summarizeStep(step) {
   if (r.error) return `Error: ${r.error}`;
 
   switch (step.tool) {
-    case 'get_agent_identity':
-      return r.exists
-        ? `Found "${r.name || 'unnamed agent'}", active: ${String(r.active)}`
-        : 'Agent is not registered';
+        case 'get_agent_identity':
+      if (!r.exists) return 'Agent is not registered';
+      return r.name
+        ? `Found "${r.name}", active: ${String(r.active)}`
+        : 'Registered (registration file stored externally)';
     case 'get_reputation':
       return r.feedbackCount > 0
         ? `${r.feedbackCount} feedback entries from ${r.clientCount} clients, summary ${r.summaryValue}`
@@ -219,6 +220,201 @@ function summarizeStep(step) {
     default:
       return 'Done';
   }
+}
+
+const SIGNALS = [
+  {
+    key: 'successRate',
+    label: 'Task success',
+    note: 'win/loss outcomes',
+    weight: 40,
+    value: (b) => b?.success?.rate ?? null,
+    detail: (b) =>
+      b?.success ? `${b.success.positive} of ${b.success.total} positive` : '',
+  },
+  {
+    key: 'validationRate',
+    label: 'Validation',
+    note: 'pass/fail checks',
+    weight: 25,
+    value: (b) => b?.validation?.rate ?? null,
+    detail: (b) =>
+      b?.validation ? `${b.validation.positive} of ${b.validation.total} passed` : '',
+  },
+  {
+    key: 'reputationScore',
+    label: 'Reputation',
+    note: 'percentage ratings',
+    weight: 20,
+    value: (b) => b?.rating?.avg ?? null,
+    detail: (b) =>
+      b?.rating ? `${b.rating.count} rating(s), average ${b.rating.avg}` : '',
+  },
+  {
+    key: 'reliability',
+    label: 'Reliability',
+    note: 'no onchain source yet',
+    weight: 10,
+    value: () => null,
+    detail: () => '',
+  },
+  {
+    key: 'recency',
+    label: 'Recency',
+    note: 'no onchain source yet',
+    weight: 5,
+    value: () => null,
+    detail: () => '',
+  },
+];
+
+function ScoreBreakdown({ trace }) {
+  const breakdown = trace.find((t) => t.tool === 'get_feedback_breakdown')?.result;
+  const scored = trace.find((t) => t.tool === 'compute_trust_score')?.result;
+
+  if (!scored || scored.error) return null;
+
+  const missing = scored.missing || [];
+  const coverage = scored.coverage || 0;
+
+  return (
+    <div className="breakdown">
+      <span className="trace-title">How the score was built</span>
+
+      <p className="breakdown-sub">
+        {scored.score === null
+          ? 'No signal had enough evidence, so no score was produced.'
+          : `Final score ${scored.score}/100. Evidence covers ${Math.round(
+              coverage * 100
+            )}% of the scoring model, and the score is weighted over the signals that have evidence.`}
+      </p>
+
+      {SIGNALS.map((signal) => {
+        const used = !missing.includes(signal.key);
+        const value = used ? signal.value(breakdown) : null;
+        const points =
+          used && value !== null && coverage > 0
+            ? (value * signal.weight) / (coverage * 100)
+            : null;
+
+        return (
+          <div className={`bd-row ${used && value !== null ? '' : 'bd-off'}`} key={signal.key}>
+            <div className="bd-head">
+              <span>
+                {signal.label} <em>{signal.note}</em>
+              </span>
+              <span>weight {signal.weight}%</span>
+            </div>
+
+            {used && value !== null ? (
+              <>
+                <div className="bd-bar">
+                  <div style={{ width: `${Math.min(100, value)}%` }} />
+                </div>
+
+                <div className="bd-foot">
+                  <span>
+                    {value}% - {signal.detail(breakdown)}
+                  </span>
+                  <span>+{points.toFixed(1)} pts</span>
+                </div>
+              </>
+            ) : (
+              <div className="bd-foot">
+                <span>No usable evidence</span>
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      {(scored.notes || []).map((note, index) => (
+        <p className="breakdown-note" key={index}>
+          {note}
+        </p>
+      ))}
+    </div>
+  );
+}
+
+function VerifyRecord({ agentId }) {
+  const [state, setState] = useState({ status: 'idle' });
+
+  async function verify() {
+    setState({ status: 'loading' });
+
+    try {
+      const response = await fetch(`${ANALYST_URL}/api/verify?agentId=${agentId}`);
+      const data = await response.json();
+
+      if (!response.ok) {
+        setState({ status: 'error', message: data.error || 'Verification failed.' });
+        return;
+      }
+
+      setState({ status: 'done', data });
+    } catch {
+      setState({ status: 'error', message: 'Could not reach the analyst server.' });
+    }
+  }
+
+  const data = state.data;
+
+  return (
+    <div className="verify-box">
+      <button
+        className="verify-button"
+        onClick={verify}
+        disabled={state.status === 'loading'}
+      >
+        {state.status === 'loading' ? 'Verifying...' : 'Verify onchain record'}
+      </button>
+
+      {state.status === 'error' && <p className="verify-bad">{state.message}</p>}
+
+      {data && !data.recorded && (
+        <p className="verify-note">
+          No AgentCredit record exists for agent #{data.agentId} yet. Tick
+          "Record verdict onchain" and run the check to create one.
+        </p>
+      )}
+
+      {data && data.recorded && data.hashMatches && (
+        <p className="verify-good">
+          Verified. The score stored onchain ({data.recorded.score}/100,
+          coverage {data.recorded.coverage}%) was derived from exactly the
+          registry data shown below. The evidence hash matches.
+        </p>
+      )}
+
+      {data && data.recorded && !data.hashMatches && (
+        <p className="verify-bad">
+          The registry data has changed since this record was written
+          (new feedback or an updated registration). The record says{' '}
+          {data.recorded.score}/100; today's data would give{' '}
+          {data.currentScore === null ? 'no score' : `${data.currentScore}/100`}.
+        </p>
+      )}
+
+      {data && data.recorded && (
+        <details className="verify-details">
+          <summary>Show the evidence behind the hash</summary>
+
+          <p className="verify-note">
+            Stored hash: {data.recorded.evidenceHash}
+            <br />
+            Recomputed: {data.recomputedHash}
+            <br />
+            The hash is keccak256 of the JSON text of this object:
+          </p>
+
+          <pre className="analyst-answer">
+            {JSON.stringify(data.evidence, null, 2)}
+          </pre>
+        </details>
+      )}
+    </div>
+  );
 }
 
 function LiveResult({ data }) {
@@ -260,6 +456,7 @@ function LiveResult({ data }) {
             </div>
           ))}
         </div>
+                <ScoreBreakdown trace={data.trace} />
                 {data.onchain && (
           <div className="onchain-box">
             <span className="trace-title">Recorded onchain</span>
@@ -281,6 +478,7 @@ function LiveResult({ data }) {
             </code>
           </div>
         )}
+                <VerifyRecord agentId={data.agentId} />
         <pre className="analyst-answer">{data.answer}</pre>
 
         <span className="trace-meta">

@@ -1,6 +1,7 @@
 import "dotenv/config";
 import http from "node:http";
 import { analyze } from "./analyst.js";
+import { verifyRecord } from "./tools.js";
 
 const PORT = process.env.PORT || 8787;
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || "http://localhost:5173")
@@ -76,6 +77,15 @@ function rateLimited(ip) {
   recent.push(now);
   hits.set(ip, recent);
   return recent.length > 10;
+}
+
+const verifyHits = new Map();
+function verifyLimited(ip) {
+  const now = Date.now();
+  const recent = (verifyHits.get(ip) || []).filter((t) => now - t < 60_000);
+  recent.push(now);
+  verifyHits.set(ip, recent);
+  return recent.length > 30;
 }
 
 function send(res, status, body, origin) {
@@ -200,6 +210,25 @@ const server = http.createServer(async (req, res) => {
     }
   }
    
+
+    if (req.method === "GET" && req.url.startsWith("/api/verify")) {
+    if (verifyLimited(clientIp(req))) {
+      return send(res, 429, { error: "Too many requests, try again in a minute." }, origin);
+    }
+
+    const agentId = Number(new URL(req.url, "http://localhost").searchParams.get("agentId"));
+
+    if (!Number.isInteger(agentId) || agentId < 0) {
+      return send(res, 400, { error: "agentId must be a non-negative integer." }, origin);
+    }
+
+    try {
+      return send(res, 200, await verifyRecord(agentId), origin);
+    } catch (err) {
+      console.error("verify failed:", err.message);
+      return send(res, 500, { error: "Verification failed. Please try again." }, origin);
+    }
+  }
   if (req.method === "POST" && req.url === "/api/analyze-stream") {
     if (rateLimited(clientIp(req))) {
       return send(res, 429, { error: "Too many requests, try again in a minute." }, origin);

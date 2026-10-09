@@ -167,7 +167,7 @@ export async function loadAgent(id) {
       (breakdown.validation && breakdown.validation.total >= MIN_FEEDBACK) ||
       (breakdown.rating && breakdown.rating.count >= MIN_FEEDBACK));
 
-  let record = null;
+  let record;
   try {
     record = await client.readContract({
       address: AGENTCREDIT_CONTRACT,
@@ -176,7 +176,7 @@ export async function loadAgent(id) {
       args: [agentId],
     });
   } catch {
-    record = null;
+    // Ignore read failures for legacy or missing trust records.
   }
 
   return {
@@ -232,4 +232,22 @@ export async function loadAgents(ids, onAgent, shouldStop) {
       onAgent({ id, error: true });
     }
   }
+}
+
+const gateAbi = parseAbi([
+  "function isTrusted(uint256 agentId, uint256 minScore, uint256 maxAge, uint256 minCoverage) view returns (bool)",
+]);
+
+export async function checkGate(agentId, minScore, maxAgeDays, minCoverage) {
+  return getPublicClient().readContract({
+    address: AGENTCREDIT_CONTRACT,
+    abi: gateAbi,
+    functionName: "isTrusted",
+    args: [
+      BigInt(agentId),
+      BigInt(minScore),
+      BigInt(Math.round(maxAgeDays * 86400)),
+      BigInt(minCoverage),
+    ],
+  });
 }

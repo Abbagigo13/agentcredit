@@ -14,6 +14,7 @@ import {
   getScoredAgentIds,
   loadAgent,
   loadAgents,
+  checkGate,
 } from '../lib/registry';
 
 function shortAddress(address) {
@@ -159,6 +160,7 @@ function Agents() {
         </p>
 
         {lookupError && <p className="lookup-error">{lookupError}</p>}
+                <TrustGate scored={list.filter((agent) => agent.credit)} />
 
         {loading && list.length === 0 && (
           <div className="result-card loading-card">
@@ -184,6 +186,141 @@ function Agents() {
         )}
       </div>
     </main>
+  );
+}
+
+function TrustGate({ scored }) {
+  const [agentId, setAgentId] = useState('10');
+  const [minScore, setMinScore] = useState(70);
+  const [minCoverage, setMinCoverage] = useState(20);
+  const [maxAgeDays, setMaxAgeDays] = useState(0);
+  const [state, setState] = useState({ status: 'idle' });
+
+  async function run() {
+    if (!/^\d+$/.test(agentId)) {
+      setState({ status: 'error', message: 'Enter an agent number.' });
+      return;
+    }
+
+    setState({ status: 'loading' });
+
+    try {
+      const [open, agent] = await Promise.all([
+        checkGate(Number(agentId), minScore, maxAgeDays, minCoverage),
+        loadAgent(Number(agentId)),
+      ]);
+
+      setState({ status: 'done', open, credit: agent.credit, id: Number(agentId) });
+    } catch {
+      setState({ status: 'error', message: 'Could not read the contract. Please try again.' });
+    }
+  }
+
+  function reasons() {
+    const credit = state.credit;
+    if (!credit) return ['No AgentCredit record exists for this agent yet.'];
+
+    const list = [];
+    const ageDays = state.ageDays ?? 0;
+
+    if (credit.score < minScore) list.push(`score ${credit.score} is below ${minScore}`);
+    if (credit.coverage < minCoverage) list.push(`coverage ${credit.coverage}% is below ${minCoverage}%`);
+    if (maxAgeDays > 0 && ageDays > maxAgeDays) list.push('the record is older than the allowed age');
+
+    return list;
+  }
+
+  return (
+    <section className="gate-panel">
+      <span className="section-label">Trust-gated actions</span>
+      <h2>Would a protected action let this agent in?</h2>
+
+      <p className="gate-sub">
+        This calls <code>isTrusted</code> on the AgentCredit contract on Monad
+        testnet. Any app or contract can gate an action on the same call.
+      </p>
+
+      <div className="gate-grid">
+        <label>
+          Agent number
+          <input value={agentId} onChange={(event) => setAgentId(event.target.value)} />
+        </label>
+
+        <label>
+          Minimum score: {minScore}
+          <input
+            type="range"
+            min="0"
+            max="100"
+            value={minScore}
+            onChange={(event) => setMinScore(Number(event.target.value))}
+          />
+        </label>
+
+        <label>
+          Minimum coverage: {minCoverage}%
+          <input
+            type="range"
+            min="0"
+            max="100"
+            value={minCoverage}
+            onChange={(event) => setMinCoverage(Number(event.target.value))}
+          />
+        </label>
+
+        <label>
+          Max record age in days (0 = any)
+          <input
+            type="number"
+            min="0"
+            value={maxAgeDays}
+            onChange={(event) => setMaxAgeDays(Math.max(0, Number(event.target.value) || 0))}
+          />
+        </label>
+      </div>
+
+      {scored.length > 0 && (
+        <div className="gate-picks">
+          Agents with onchain records:
+          {scored.map((agent) => (
+            <button
+              key={agent.id}
+              className="gate-chip"
+              onClick={() => setAgentId(String(agent.id))}
+            >
+              #{agent.id}
+            </button>
+          ))}
+        </div>
+      )}
+
+      <button className="verify-button" onClick={run} disabled={state.status === 'loading'}>
+        {state.status === 'loading' ? 'Asking the contract...' : 'Run the gate'}
+      </button>
+
+      {state.status === 'error' && <p className="verify-bad">{state.message}</p>}
+
+      {state.status === 'done' && state.open && (
+        <p className="verify-good">
+          GATE OPEN. The contract returned true for agent #{state.id}
+          {state.credit
+            ? ` (score ${state.credit.score}, coverage ${state.credit.coverage}%).`
+            : '.'}
+        </p>
+      )}
+
+      {state.status === 'done' && !state.open && (
+        <p className="verify-bad">
+          GATE CLOSED. The contract returned false: {reasons().join('; ')}.
+        </p>
+      )}
+
+      <pre className="gate-code">{`require(
+  IAgentCredit(0x0b0792a328c2253e4F23f98875ebb7DEEa859971)
+    .isTrusted(agentId, ${minScore}, ${Math.round(maxAgeDays * 86400)}, ${minCoverage}),
+  "agent not trusted"
+);`}</pre>
+    </section>
   );
 }
 
